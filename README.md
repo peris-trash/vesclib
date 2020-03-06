@@ -3,6 +3,8 @@
 Control funcions and routines for the VESC, written in pure C.
 
 ### Supported Firmwares
+currently only the raw protocol is supported, you have to assemble your own commands.
+Planned:
 - 4.12
 - 23.3 (Unity)
 

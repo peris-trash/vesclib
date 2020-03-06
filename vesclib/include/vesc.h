@@ -11,10 +11,41 @@
 #ifndef _VESC_H_
 #define _VESC_H_
 
+// choose firmware compatibility
+//_VESC_VERSION_4_12_
+//_VESC_VERSION_UNITY_23_33_
+#define _VESC_VERSION_4_12_
+
+//#define _VESC_TIMEOUT_EN_
+#define VESC_TIMEOUT_VAL 50
+#define VESC_TICK_COUNT g_ullSystemTick
+
+#define VESC_CRC16_INC "crc.h"
+#define VESC_CRC16_FUNC(buff, count) crc16(buff, count)
+
+#include <stdlib.h>
 #include <stdint.h>
-#include "crc.h"
+#include VESC_CRC16_INC
+
+typedef enum
+{
+    RECEIVE_TIMEOUT,
+    CRC_ERR,
+    END_BYTE_ERR,
+    UNHANDLED_MESSAGE,
+    ALLOC_ERR
+} vesc_error_t;
+
+typedef uint8_t (* vesc_handle_message_cb_fn_t)(uint8_t, uint8_t*, uint16_t);
+typedef void (* vesc_handle_err_cb_fn_t)(vesc_error_t);
 
 void vesc_process_buffer(uint8_t* buff, uint16_t len);
-uint8_t vesc_unpack(uint8_t* buff, uint16_t len, uint16_t crc);
+
+void vesc_send_payload(uint8_t* payload, uint16_t len);
+
+void vesc_set_message_callback(vesc_handle_message_cb_fn_t funcPtr);
+void vesc_set_err_callback(vesc_handle_message_cb_fn_t funcPtr);
+
+void _vesc_write_byte(uint8_t byte);
 
 #endif /* _VESC_H_ */
