@@ -10,12 +10,12 @@
 
 #include "vesc.h"
 
-static vesc_handle_message_cb_fn_t vesc_handle_msg_cb = NULL;
-static vesc_handle_err_cb_fn_t vesc_handle_err_cb = NULL;
+static vesc_handle_err_cb_fn_t pfn_vesc_handle_err_cb = NULL;
+static vesc_handle_message_cb_fn_t pfn_vesc_handle_msg_cb = NULL;
 
 typedef enum
 {
-    PROCESS_BUFFER_GET_START,
+    PROCESS_BUFFER_GET_START = 0,
     PROCESS_BUFFER_GET_LEN_SHORT,
     PROCESS_BUFFER_GET_LEN_LONG,
     PROCESS_BUFFER_GET_PAYLOAD,
@@ -23,144 +23,162 @@ typedef enum
     PROCESS_BUFFER_GET_END
 } process_buffer_state_t;
 
-void vesc_set_message_callback(vesc_handle_message_cb_fn_t funcPtr)
+void vesc_set_err_callback(vesc_handle_message_cb_fn_t pFn)
 {
-    vesc_handle_msg_cb = funcPtr;
+    pfn_vesc_handle_err_cb = pFn;
 }
-void vesc_set_err_callback(vesc_handle_message_cb_fn_t funcPtr)
+void vesc_set_message_callback(vesc_handle_message_cb_fn_t pFn)
 {
-    vesc_handle_err_cb = funcPtr;
+    pfn_vesc_handle_msg_cb = pFn;
 }
 
-void vesc_handle_message(uint8_t* payload, uint16_t payload_len)
+void vesc_handle_error(vesc_error_t xErr)
 {
-    uint8_t msg_id = *(payload++);
+    if(pfn_vesc_handle_err_cb)
+        pfn_vesc_handle_err_cb(xErr);
+}
+void vesc_handle_message(uint8_t* pubPayload, uint16_t usPayloadLen)
+{
+    uint8_t ubMsgId = *(pubPayload++);
 
-    if(vesc_handle_msg_cb)
-        if(vesc_handle_msg_cb(msg_id, payload, payload_len - 1))
+    if(pfn_vesc_handle_msg_cb)
+        if(pfn_vesc_handle_msg_cb(ubMsgId, pubPayload, usPayloadLen - 1))
             return;
-
-    //if(vesc_default_handle_msg(msg_id, payload, payload_len - 1))
-    //    return;
 
     vesc_handle_error(UNHANDLED_MESSAGE);
 }
-void vesc_handle_error(vesc_error_t err)
-{
-    if(vesc_handle_err_cb)
-        vesc_handle_err_cb(err);
-}
 
-void vesc_process_buffer(uint8_t* buff, uint16_t len)
+void vesc_process_buffer(uint8_t* pubBuff, uint16_t usLen)
 {
-    static process_buffer_state_t process_buffer_state = PROCESS_BUFFER_GET_START;
+    static process_buffer_state_t xProcessBuffState = PROCESS_BUFFER_GET_START;
+
+    #ifdef _VESC_DYNAMIC_ALLOCATION_EN_
+    static uint8_t* spubPayloadBuff;
+    #else
+    static uint8_t spubPayloadBuff[VESC_MAX_BUFFER];
+    #endif
 
     #ifdef _VESC_TIMEOUT_EN_
-        static uint64_t last_receive_tick = 0;
-        if(VESC_TICK_COUNT > (last_receive_tick + VESC_TIMEOUT_VAL) && process_buffer_state != PROCESS_BUFFER_GET_START)
+        static uint64_t ullLastReceiveTick = 0;
+        if(VESC_TICK_COUNT > (ullLastReceiveTick + VESC_TIMEOUT_VAL) && xProcessBuffState != PROCESS_BUFFER_GET_START)
         {
             // timed out
-            process_buffer_state = PROCESS_BUFFER_GET_START;
+            xProcessBuffState = PROCESS_BUFFER_GET_START;
+
+            #ifdef _VESC_DYNAMIC_ALLOCATION_EN_
+            if(spubPayloadBuff) VESC_FREE_FUNC(spubPayloadBuff);
+            #endif
             vesc_handle_error(RECEIVE_TIMEOUT);
         }
 
-        if(len || process_buffer_state == PROCESS_BUFFER_GET_START)
-            last_receive_tick = VESC_TICK_COUNT;
+        if(usLen || xProcessBuffState == PROCESS_BUFFER_GET_START)
+            ullLastReceiveTick = VESC_TICK_COUNT;
     #endif
 
-    while(len--)
+    while(usLen--)
     {
-        static uint8_t len_first;
-        static uint16_t packet_len;
+        static uint8_t subLenFirstByte;
+        static uint16_t susPacketLen;
 
-        static uint8_t payload_first;
-        static uint16_t payload_count;
+        static uint8_t subPayloadFirstByte;
+        static uint16_t susPayloadCount;
 
-        static uint8_t* payload_buff;
+        static uint8_t* spubPayloadBuffPtr = NULL;
 
-        static uint8_t crc_first;
-        static uint16_t packet_crc;
+        static uint8_t subCrcFirstByte;
+        static uint16_t susPacketCrc;
 
-        switch(process_buffer_state)
+        switch(xProcessBuffState)
         {
         case PROCESS_BUFFER_GET_START:
-            if(*buff == 0x02)
-                process_buffer_state = PROCESS_BUFFER_GET_LEN_SHORT;
-            else if(*buff == 0x03)
+            if(*pubBuff == 0x02)
+                xProcessBuffState = PROCESS_BUFFER_GET_LEN_SHORT;
+            else if(*pubBuff == 0x03)
             {
-                process_buffer_state = PROCESS_BUFFER_GET_LEN_LONG;
-                len_first = 1;
+                xProcessBuffState = PROCESS_BUFFER_GET_LEN_LONG;
+                subLenFirstByte = 1;
             }
             break;
 
         case PROCESS_BUFFER_GET_LEN_SHORT:
-            packet_len = *buff;
-            payload_first = 1;
-            process_buffer_state = PROCESS_BUFFER_GET_PAYLOAD;
+            susPacketLen = *pubBuff;
+            subPayloadFirstByte = 1;
+            xProcessBuffState = PROCESS_BUFFER_GET_PAYLOAD;
             break;
 
         case PROCESS_BUFFER_GET_LEN_LONG:
-            if(len_first)
+            if(subLenFirstByte)
             {
-                packet_len = (uint16_t)*buff << 8;
-                len_first = 0;
+                susPacketLen = (uint16_t)*pubBuff << 8;
+                subLenFirstByte = 0;
             }
             else
             {
-                packet_len |= *buff;
-                payload_first = 1;
-                process_buffer_state = PROCESS_BUFFER_GET_PAYLOAD;
+                susPacketLen |= *pubBuff;
+                subPayloadFirstByte = 1;
+                xProcessBuffState = PROCESS_BUFFER_GET_PAYLOAD;
             }
             break;
 
         case PROCESS_BUFFER_GET_PAYLOAD:
-            if(payload_first)
+            if(subPayloadFirstByte)
             {
-                if(payload_buff) free(payload_buff);
-
-                payload_buff = (uint8_t*)malloc(packet_len);
-
-                if(!payload_buff)
+                if(susPacketLen > VESC_MAX_BUFFER)
                 {
-                    vesc_handle_error(ALLOC_ERR);
+                    vesc_handle_error(MEM_ERR);
                     return;
                 }
 
-                payload_count = 0;
-                payload_first = 0;
+                #ifdef _VESC_DYNAMIC_ALLOCATION_EN_
+                spubPayloadBuff = (uint8_t*)VESC_ALLOC_FUNC(susPacketLen);
+
+                if(!spubPayloadBuff)
+                {
+                    vesc_handle_error(MEM_ERR);
+                    return;
+                }
+                #endif
+
+                spubPayloadBuffPtr = spubPayloadBuff;
+
+                susPayloadCount = 0;
+                subPayloadFirstByte = 0;
 
                 break;
             }
 
-            *(payload_buff++) = *buff;
-            payload_count++;/* condition */
+            *(spubPayloadBuffPtr++) = *pubBuff;
+            susPayloadCount++;
 
-            if(payload_count >= (packet_len - 2))
+            if(susPayloadCount >= susPacketLen)
             {
-                crc_first = 1;
-                process_buffer_state = PROCESS_BUFFER_GET_CRC;
+                subCrcFirstByte = 1;
+                xProcessBuffState = PROCESS_BUFFER_GET_CRC;
             }
             break;
 
         case PROCESS_BUFFER_GET_CRC:
-            if(crc_first)
+            if(subCrcFirstByte)
             {
-                packet_crc = (uint16_t)*buff << 8;
-                crc_first = 0;
+                susPacketCrc = (uint16_t)*pubBuff << 8;
+                subCrcFirstByte = 0;
             }
             else
             {
-                packet_crc |= *buff;
-                process_buffer_state = PROCESS_BUFFER_GET_END;
+                susPacketCrc |= *pubBuff;
+                xProcessBuffState = PROCESS_BUFFER_GET_END;
             }
             break;
 
-        default:
-            if(*buff == 0x03)
+        case PROCESS_BUFFER_GET_END:
+            if(*pubBuff == 0x03)
             {
-                if(VESC_CRC16_FUNC(payload_buff, packet_len) == packet_crc)
+                if(VESC_CRC16_FUNC(spubPayloadBuff, susPacketLen) == susPacketCrc)
                 {
-                    vesc_handle_message(payload_buff, packet_len);
+                    vesc_handle_message(spubPayloadBuff, susPacketLen);
+                    #ifdef _VESC_DYNAMIC_ALLOCATION_EN_
+                    if(spubPayloadBuff) VESC_FREE_FUNC(spubPayloadBuff);
+                    #endif
                     break;
                 }
                 vesc_handle_error(CRC_ERR);
@@ -168,38 +186,44 @@ void vesc_process_buffer(uint8_t* buff, uint16_t len)
             else
                 vesc_handle_error(END_BYTE_ERR);
 
-            if(payload_buff) free(payload_buff);
+            #ifdef _VESC_DYNAMIC_ALLOCATION_EN_
+            if(spubPayloadBuff) VESC_FREE_FUNC(spubPayloadBuff);
+            #endif
+            break;
+
+            default:
+            xProcessBuffState = PROCESS_BUFFER_GET_START;
             break;
         }
 
-        buff++;
+        pubBuff++;
     }
 }
 
-void vesc_send_payload(uint8_t* payload, uint16_t len)
+void vesc_send_payload(uint8_t* pubPayload, uint16_t usLen)
 {
-    uint16_t payload_crc = VESC_CRC16_FUNC(payload, len);
+    uint16_t usPayloadCrc = VESC_CRC16_FUNC(pubPayload, usLen);
 
-    if(len < 256)
+    if(usLen < 256)
     {
         _vesc_write_byte(0x02);
-        _vesc_write_byte(len & 0xFF);
+        _vesc_write_byte(usLen & 0xFF);
 
     }
     else
     {
         _vesc_write_byte(0x03);
-        _vesc_write_byte(len >> 8);
-        _vesc_write_byte(len & 0xFF);
+        _vesc_write_byte(usLen >> 8);
+        _vesc_write_byte(usLen & 0xFF);
     }
 
-    while(len--)
+    while(usLen--)
     {
-        _vesc_write_byte(*(payload++));
+        _vesc_write_byte(*(pubPayload++));
     }
 
-    _vesc_write_byte(payload_crc >> 8);
-    _vesc_write_byte(payload_crc & 0xFF);
+    _vesc_write_byte(usPayloadCrc >> 8);
+    _vesc_write_byte(usPayloadCrc & 0xFF);
 
     _vesc_write_byte(0x03);
 }

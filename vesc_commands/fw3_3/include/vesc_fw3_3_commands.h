@@ -14,7 +14,6 @@
 #include <stdint.h>
 #include "vesc.h"
 
-#ifdef _VESC_VERSION_4_12_
 // Communication commands
 typedef enum
 {
@@ -55,14 +54,6 @@ typedef enum
 	VESC_COMM_SET_CHUCK_DATA,
 	VESC_COMM_CUSTOM_APP_DATA,
 	VESC_COMM_NON
-} VESC_COMM_PACKET_ID;
-
-#endif
-
-#ifdef _VESC_VERSION_UNITY_23_33_
-// Communication commands
-
-#endif
-
+} VESC_FW3_3_COMM_PACKET_ID;
 
 #endif /* _VESC_DATA_H_ */
